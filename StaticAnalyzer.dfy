@@ -1,12 +1,13 @@
 // ECS 261 Final Project
 // StaticAnalyzer.dfy
 
-module StaticAnalyzer {
-    // abstract state of variables, not like the dynamically updated map of variables
-    type Defs = set<string>
-    
+module StaticAnalyzer {    
     // AST Syntax Definition
 
+    // abstract state of variables, not like the dynamically updated map of variables but is able to track certain aspects of the variables
+    datatype AbsVal = Zero | NonZero | Unknown
+    type AbsState = map<string, AbsVal>
+    
     // Expression datatype
     datatype Expr =
         | Const(n: int)
@@ -15,7 +16,7 @@ module StaticAnalyzer {
         | Sub(e1: Expr, e2: Expr)
         | Mul(e1: Expr, e2: Expr)
         | Div(e1: Expr, e2: Expr)
-        // | Mod(e1: Expr, e2: Expr) // Potentially add this
+        | Mod(e1: Expr, e2: Expr) // Potentially add this
 
     // Statement datatype
     datatype Stmt =
@@ -115,6 +116,17 @@ module StaticAnalyzer {
                     if v2 == 0 then Err(DivByZero) else Ok(v1 / v2)
                 }
             }
+
+        case Mod(a,b) =>
+            match EvalExpr(a, env) {
+            case Err(er) => Err(er)
+            case Ok(v1) =>
+                match EvalExpr(b, env) {
+                case Err(er) => Err(er)
+                case Ok(v2) =>
+                    if v2 == 0 then Err(DivByZero) else Ok(v1 % v2)
+                }
+            }
     }
 
     // Statement execution (runtime)
@@ -152,67 +164,112 @@ module StaticAnalyzer {
             }
     }
 
-    function CheckExpr(e: Expr, defs: Defs): bool
+    function AbsEval(e: Expr, state: AbsState): AbsVal        
+        decreases e
+    {
+        match e
+        case Const(n) => if n == 0 then Zero else NonZero
+
+        case Var(x) => if x in state then state[x] else Unknown
+
+        case Add(a,b) =>
+            var a_eval := AbsEval(a, state);
+            var b_eval := AbsEval(b, state);
+            
+            if a_eval == Zero && b_eval == Zero then Zero
+            else if a_eval == NonZero && b_eval == Zero then NonZero
+            else if a_eval == Zero && b_eval == NonZero then NonZero
+            else Unknown
+
+        case Sub(a,b) =>
+            var a_eval := AbsEval(a, state);
+            var b_eval := AbsEval(b, state);
+            
+            if a_eval == Zero && b_eval == Zero then Zero
+            else if a_eval == NonZero && b_eval == Zero then NonZero
+            else if a_eval == Zero && b_eval == NonZero then NonZero
+            else Unknown
+
+        case Mul(a,b) =>
+            var a_eval := AbsEval(a, state);
+            var b_eval := AbsEval(b, state);
+
+            if a_eval == Zero || b_eval == Zero then Zero
+            else if a_eval == NonZero && b_eval == NonZero then NonZero
+            else Unknown
+
+        case Div(a, b) => 
+            if AbsEval(a, state) == Zero && AbsEval(b, state) == NonZero then Zero else Unknown
+
+        case Mod(a, b) => 
+            if AbsEval(a, state) == Zero && AbsEval(b, state) == NonZero then Zero else Unknown
+    }
+    
+    function CheckExpr(e: Expr, state: AbsState): bool
         decreases e
     {
         match e
 
         case Const(n) => true
 
-        case Var(x) => x in defs
+        case Var(x) => x in state
 
-        case Add(a,b) => CheckExpr(a, defs) && CheckExpr(b, defs)
+        case Add(a,b) => CheckExpr(a, state) && CheckExpr(b, state)
         
-        case Sub(a,b) => CheckExpr(a, defs) && CheckExpr(b, defs)
+        case Sub(a,b) => CheckExpr(a, state) && CheckExpr(b, state)
         
-        case Mul(a,b) => CheckExpr(a, defs) && CheckExpr(b, defs)
+        case Mul(a,b) => CheckExpr(a, state) && CheckExpr(b, state)
 
-        case Div(a,b) => CheckExpr(a, defs) && CheckExpr(b, defs) && match b {
-                case Const(n) => n != 0
-                case _ => false
-            }
+        case Div(a,b) => CheckExpr(a, state) && CheckExpr(b, state) && AbsEval(b, state) == NonZero
+
+        case Mod(a,b) => CheckExpr(a, state) && CheckExpr(b, state) && AbsEval(b, state) == NonZero
         // to be clear this is sound but not complete.
         // it's possible for there to be a valid example where we have a
         // variable or a subexpression which evaluates to 0, but for the 
         // sake of simplicity early on this will only allow validity if denom is a non-zero constant.
     }
 
-    function AnalyzeStmt(s: Stmt, defs: Defs): (bool, Defs)
+    function JoinVal(a: AbsVal, b: AbsVal): AbsVal
+    {
+        if a == b then a else Unknown
+    }
+
+    function JoinState(s1: AbsState, s2: AbsState): AbsState
+    {
+        map k | k in s1 && k in s2 :: JoinVal(s1[k], s2[k])
+    }
+
+    function AnalyzeStmt(s: Stmt, state: AbsState): (bool, AbsState)
         decreases s
     {
         match s
 
-        case Skip => (true, defs)
+        case Skip => (true, state)
 
         case Assign(x, e) =>
-            match CheckExpr(e, defs){
-                case false => (false, defs)
-                case true  => (true, defs + {x})
-            }
-
+            if CheckExpr(e, state)
+            then (true, state[x := AbsEval(e, state)])
+            else (false, state)
         case Seq(s1, s2) =>
-            match AnalyzeStmt(s1, defs){
-                case (false, defs_f_s1) => (false, defs_f_s1)
-                case (true, defs_t_s1) =>
-                    match AnalyzeStmt(s2, defs_t_s1){
-                    case (false, defs_f_s2) => (false, defs_f_s2)
-                    case (true, defs_t_s2) => (true, defs_t_s2)
-                }
-            } 
+            match AnalyzeStmt(s1, state){
+                case (false, state_f_s1) => (false, state_f_s1)
+                case (true, state_t_s1) => AnalyzeStmt(s2, state_t_s1)
+            }
 
         case If(cond, then_statement, else_statement) =>
-            match CheckExpr(cond, defs){
-                case false => (false, defs)
-                case true =>
-                match AnalyzeStmt(then_statement, defs){
-                    case (false, defs_f_then) => (false, defs_f_then)
-                    case (true, defs_t_then) =>
-                        match AnalyzeStmt(else_statement, defs) {
-                            case (false, defs_f_else) => (false, defs_f_else)
-                            case (true, defs_t_else) => (true, defs_t_then * defs_t_else)
+            if(CheckExpr(cond, state))
+                then match AbsEval(cond, state)
+                    case NonZero => AnalyzeStmt(then_statement, state)
+                    case Zero => AnalyzeStmt(else_statement, state)
+                    case Unknown => match AnalyzeStmt(then_statement, state){
+                            case (false, state_f_then) => (false, state_f_then)
+                            case (true, state_t_then) =>
+                                match AnalyzeStmt(else_statement, state) {
+                                    case (false, state_f_else) => (false, state_f_else)
+                                    case (true, state_t_else) => (true, JoinState(state_t_then, state_t_else))
+                                }
                         }
-                }
-            }
+                else (false, state)            
     }
 
     // helper predicate for an error function
@@ -222,187 +279,584 @@ module StaticAnalyzer {
         case Err(_) => true
     }
 
-    // key lemma: if CheckExpr returns true (meaning expression is safe), then EvalExpr will not result in an error.
-    lemma CheckTrueEvalValid(e: Expr, defs: Defs, env: Env)
-        requires CheckExpr(e, defs)
-        requires forall v :: v in defs ==> v in env
-        ensures !IsErr(EvalExpr(e, env))
-        decreases e
-    {        
-        match e
+    predicate Consistent(st: AbsState, env: Env){
+        forall x :: x in st ==>
+            x in env &&
+            (st[x] == Zero ==>  env[x] == 0) &&
+            (st[x] == NonZero ==> env[x] != 0)
+    }
 
-        case Const(x) => {
-            assert EvalExpr(Const(x), env) == Ok(x);
-            assert !IsErr(Ok(x));
-            assert !IsErr(EvalExpr(e, env));
+    lemma AbsNonZeroOkValueNonZero(e: Expr, st: AbsState, env: Env, v: int)
+        requires AbsEval(e, st) == NonZero
+        requires CheckExpr(e, st)
+        requires Consistent(st, env)
+        requires EvalExpr(e, env) == Ok(v)
+        ensures v != 0
+        decreases e
+    {
+        match e
+        
+        case Const(n) => {
+            assert n != 0;
+            assert v == n;
+        }
+
+        case Var(n) => {
+            assert n in st && n in env;
+            assert env[n] != 0;
+        }
+
+        case Add(a, b) => {
+            var a_eval := AbsEval(a, st);
+            var b_eval := AbsEval(b, st);
+
+            assert (a_eval == NonZero && b_eval == Zero) || (a_eval == Zero && b_eval == NonZero);
+
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
+
+            match EvalExpr(a, env)
+            case Ok(v1) => {
+                match EvalExpr(b, env)
+                case Ok(v2) => {
+                    assert v == v1 + v2;
+                    if(a_eval == NonZero){
+                        AbsZeroOkValueZero(b, st, env, v2);
+                        AbsNonZeroOkValueNonZero(a, st, env, v1);
+                        assert v2 == 0;
+                    } else{
+                        AbsZeroOkValueZero(a, st, env, v1);
+                        AbsNonZeroOkValueNonZero(b, st, env, v2);
+                        assert v1 == 0;
+                    }
+                }
+                case Err(_) => assert false;
+            }
+            case Err(_) => assert false;
+        }
+
+        case Sub(a, b) => {
+            var a_eval := AbsEval(a, st);
+            var b_eval := AbsEval(b, st);
+
+            assert (a_eval == NonZero && b_eval == Zero) || (a_eval == Zero && b_eval == NonZero);
+
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
+
+            match EvalExpr(a, env)
+            case Ok(v1) => {
+                match EvalExpr(b, env)
+                case Ok(v2) => {
+                    assert v == v1 - v2;
+                    if(a_eval == NonZero){
+                        AbsZeroOkValueZero(b, st, env, v2);
+                        AbsNonZeroOkValueNonZero(a, st, env, v1);
+                        assert v2 == 0;
+                    } else{
+                        AbsZeroOkValueZero(a, st, env, v1);
+                        AbsNonZeroOkValueNonZero(b, st, env, v2);
+                        assert v1 == 0;
+                    }
+                }
+                case Err(_) => assert false;
+            }
+            case Err(_) => assert false;
+        }
+
+        case Mul(a, b) => {
+            var a_eval := AbsEval(a, st);
+            var b_eval := AbsEval(b, st);
+
+            assert (a_eval == NonZero && b_eval == NonZero);
+
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
+
+            match EvalExpr(a, env)
+            case Ok(v1) => {
+                match EvalExpr(b, env)
+                case Ok(v2) => {
+                    assert v == v1 * v2;
+                    AbsNonZeroOkValueNonZero(a, st, env, v1);
+                    AbsNonZeroOkValueNonZero(b, st, env, v2);
+                    assert v1 != 0 && v2 != 0;
+                }
+                case Err(_) => assert false;
+            }
+            case Err(_) => assert false;
+        }
+
+        case Div(a, b) => assert false;
+
+        case Mod(a, b) => assert false;
+    }
+
+    // If AbsEval says "Zero", then any Ok(v) must be v == 0
+    lemma AbsZeroOkValueZero(e: Expr, st: AbsState, env: Env, v: int)
+        requires AbsEval(e, st) == Zero
+        requires CheckExpr(e, st)
+        requires Consistent(st, env)
+        requires EvalExpr(e, env) == Ok(v)
+        ensures v == 0
+        decreases e
+    {
+        match e
+        case Const(n) => {
+            assert n == 0;
+            assert v == 0;
         }
 
         case Var(x) => {
-            assert x in env && x in defs;
-            assert EvalExpr(Var(x), env) == Ok(env[x]);
-            assert !IsErr(Ok(env[x]));
-            assert !IsErr(EvalExpr(e, env));
+            assert x in st;
+            assert x in env;
+            assert st[x] == Zero;
+            assert env[x] == 0;
+            assert v == env[x];
         }
 
-        case Add(x1, x2) => {
-            assert CheckExpr(x1, defs) && CheckExpr(x2, defs);
-            
-            CheckTrueEvalValid(x1, defs, env);
-            CheckTrueEvalValid(x2, defs, env);
+        case Add(a,b) => {
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
 
-            match EvalExpr(x1, env)
+            match EvalExpr(a, env)
             case Ok(v1) => {
-                match EvalExpr(x2, env)
+                match EvalExpr(b, env)
                 case Ok(v2) => {
-                    assert EvalExpr(Add(x1, x2), env) == Ok(v1 + v2);
-                    assert !IsErr(Ok(v1 + v2));
-                    assert !IsErr(EvalExpr(e, env));
+                    assert v == v1 + v2;
+                    AbsZeroOkValueZero(a, st, env, v1);
+                    AbsZeroOkValueZero(b, st, env, v2);
+                    assert v1 == v2 == 0;
                 }
-                case Err(e2) => assert false; // impossible, already know not erroneous
+                case Err(_) => assert false;
             }
-            case Err(e1) => assert false; // impossible, already know not erroneous
+            case Err(_) => assert false;
         }
 
-        case Sub(x1, x2) => {
-            assert CheckExpr(x1, defs) && CheckExpr(x2, defs);
-            
-            CheckTrueEvalValid(x1, defs, env);
-            CheckTrueEvalValid(x2, defs, env);
+        case Sub(a,b) => {
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
 
-            match EvalExpr(x1, env)
+            match EvalExpr(a, env)
             case Ok(v1) => {
-                match EvalExpr(x2, env)
+                match EvalExpr(b, env)
                 case Ok(v2) => {
-                    assert EvalExpr(Sub(x1, x2), env) == Ok(v1 - v2);
-                    assert !IsErr(Ok(v1 - v2));
-                    assert !IsErr(EvalExpr(e, env));
+                    assert v == v1 - v2;
+                    AbsZeroOkValueZero(a, st, env, v1);
+                    AbsZeroOkValueZero(b, st, env, v2);
+                    assert v1 == v2 == 0;
                 }
-                case Err(e2) => assert false; // impossible, already know not erroneous
+                case Err(_) => assert false;
             }
-            case Err(e1) => assert false; // impossible, already know not erroneous
+            case Err(_) => assert false;
         }
 
-        case Mul(x1, x2) => {
-            assert CheckExpr(x1, defs) && CheckExpr(x2, defs);
-            
-            CheckTrueEvalValid(x1, defs, env);
-            CheckTrueEvalValid(x2, defs, env);
+        case Mul(a,b) => {
+            var va := AbsEval(a, st);
+            var vb := AbsEval(b, st);
+            assert va == Zero || vb == Zero;
 
-            match EvalExpr(x1, env)
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
+
+            match EvalExpr(a, env)
             case Ok(v1) => {
-                match EvalExpr(x2, env)
+                match EvalExpr(b, env)
                 case Ok(v2) => {
-                    assert EvalExpr(Mul(x1, x2), env) == Ok(v1 * v2);
-                    assert !IsErr(Ok(v1 * v2));
-                    assert !IsErr(EvalExpr(e, env));
-                }
-                case Err(e2) => assert false; // impossible, already know not erroneous
-            }
-            case Err(e1) => assert false; // impossible, already know not erroneous
-        }
-
-        case Div(x1, x2) => {
-            assert CheckExpr(x1, defs) && CheckExpr(x2, defs);
-            
-            CheckTrueEvalValid(x1, defs, env);
-            CheckTrueEvalValid(x2, defs, env);
-
-            match x2
-            case Const(n) => {
-                assert n != 0;
-                match EvalExpr(x2, env)
-                    case Ok(v2) => {
-                        assert v2 != 0;
-                        match EvalExpr(x1, env)
-                        case Ok(v1) => {
-                            assert EvalExpr(Div(x1, x2), env) == Ok(v1 / v2);
-                            assert !IsErr(Ok(v1 / v2));
-                            assert !IsErr(EvalExpr(e, env));
-                        }
-                        case Err(e1) => assert false; // impossible, already know not erroneous
+                    assert v == v1 * v2;
+                    if(va == Zero){
+                        AbsZeroOkValueZero(a, st, env, v1);
+                        assert v1 == 0;
+                    } else {
+                        AbsZeroOkValueZero(b, st, env, v2);
+                        assert v2 == 0;
                     }
-                    case Err(e2) => assert false; // impossible, already know not erroneous
+                }
+                case Err(_) => assert false;
             }
-            case _ => assert false; // impossible, already know not erroneous
+            case Err(_) => assert false;
+        }
+
+        case Div(a,b) => {
+            assert AbsEval(a, st) == Zero && AbsEval(b, st) == NonZero;
+
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
+
+            match EvalExpr(a, env)
+            case Ok(v1) => {
+                match EvalExpr(b, env)
+                case Ok(v2) => {
+                    assert v == v1 / v2;
+                    AbsZeroOkValueZero(a, st, env, v1);
+                    AbsNonZeroOkValueNonZero(b, st, env, v2);
+                    assert v1 == 0;
+                    assert v2 != 0;
+                }
+                case Err(_) => assert false;
+            }
+            case Err(_) => assert false;
+        }
+
+        case Mod(a,b) => {
+            assert AbsEval(a, st) == Zero && AbsEval(b, st) == NonZero;
+
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
+
+            match EvalExpr(a, env)
+            case Ok(v1) => {
+                match EvalExpr(b, env)
+                case Ok(v2) => {
+                    assert v == v1 % v2;
+                    AbsZeroOkValueZero(a, st, env, v1);
+                    AbsNonZeroOkValueNonZero(b, st, env, v2);
+                    assert v1 == 0;
+                    assert v2 != 0;
+                }
+                case Err(_) => assert false;
+            }
+            case Err(_) => assert false;
+        }
+    }
+
+    lemma CheckTrueEvalValid(e: Expr, st: AbsState, env: Env)
+        requires CheckExpr(e, st)
+        requires Consistent(st, env)
+        ensures !IsErr(EvalExpr(e, env))
+        decreases e
+    {
+        match e
+        case Const(n) => {
+            assert EvalExpr(Const(n), env) == Ok(n);
+        }
+
+        case Var(x) => {
+            assert x in st;
+            assert x in env; // from Consistent
+            assert EvalExpr(Var(x), env) == Ok(env[x]);
+        }
+
+        case Add(a,b) => {
+            assert CheckExpr(a, st) && CheckExpr(b, st);
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
+
+            match EvalExpr(a, env)
+            case Ok(v1) => {
+            match EvalExpr(b, env)
+            case Ok(v2) => {
+                assert EvalExpr(Add(a,b), env) == Ok(v1 + v2);
+            }
+            case Err(_) => assert false;
+            }
+            case Err(_) => assert false;
+        }
+
+        case Sub(a,b) => {
+            assert CheckExpr(a, st) && CheckExpr(b, st);
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
+
+            match EvalExpr(a, env)
+            case Ok(v1) => {
+            match EvalExpr(b, env)
+            case Ok(v2) => {
+                assert EvalExpr(Sub(a,b), env) == Ok(v1 - v2);
+            }
+            case Err(_) => assert false;
+            }
+            case Err(_) => assert false;
+        }
+
+        case Mul(a,b) => {
+            assert CheckExpr(a, st) && CheckExpr(b, st);
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
+
+            match EvalExpr(a, env)
+            case Ok(v1) => {
+            match EvalExpr(b, env)
+            case Ok(v2) => {
+                assert EvalExpr(Mul(a,b), env) == Ok(v1 * v2);
+            }
+            case Err(_) => assert false;
+            }
+            case Err(_) => assert false;
+        }
+
+        case Div(a,b) => {
+            assert CheckExpr(a, st) && CheckExpr(b, st);
+            assert AbsEval(b, st) == NonZero;
+
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
+
+            match EvalExpr(a, env)
+            case Ok(v1) => {
+                match EvalExpr(b, env)
+                case Ok(v2) => {
+                    AbsNonZeroOkValueNonZero(b, st, env, v2);
+                    assert v2 != 0;
+                    assert EvalExpr(Div(a,b), env) == Ok(v1 / v2);
+                }
+                case Err(_) => assert false;
+            }
+            case Err(_) => assert false;
+        }
+
+        case Mod(a,b) => {
+            assert CheckExpr(a, st) && CheckExpr(b, st);
+            assert AbsEval(b, st) == NonZero;
+
+            CheckTrueEvalValid(a, st, env);
+            CheckTrueEvalValid(b, st, env);
+
+            match EvalExpr(a, env)
+            case Ok(v1) => {
+                match EvalExpr(b, env)
+                case Ok(v2) => {
+                    AbsNonZeroOkValueNonZero(b, st, env, v2);
+                    assert v2 != 0;
+                    assert EvalExpr(Mod(a,b), env) == Ok(v1 % v2);
+                }
+                case Err(_) => assert false;
+            }
+            case Err(_) => assert false;
+        }
+    }
+
+    lemma ConsistentJoinLeft(stT: AbsState, stF: AbsState, env: Env)
+        requires Consistent(stT, env)
+        ensures Consistent(JoinState(stT, stF), env)
+    {
+        forall k | k in JoinState(stT, stF)
+            ensures k in env
+            ensures (JoinState(stT, stF)[k] == Zero ==> env[k] == 0)
+            ensures (JoinState(stT, stF)[k] == NonZero ==> env[k] != 0)
+        {
+            // From membership in JoinState:
+            assert k in stT && k in stF;
+            assert k in env; // from Consistent(stT, env)
+
+            // JoinState[k] = JoinVal(stT[k], stF[k])
+            if JoinState(stT, stF)[k] == Zero {
+            // then JoinVal(...) == Zero, so stT[k] == stF[k] == Zero
+            assert stT[k] == Zero;
+            assert env[k] == 0;
+            }
+            if JoinState(stT, stF)[k] == NonZero {
+            assert stT[k] == NonZero;
+            assert env[k] != 0;
+            }
+        }
+    }
+
+    lemma ConsistentJoinRight(stT: AbsState, stF: AbsState, env: Env)
+        requires Consistent(stF, env)
+        ensures Consistent(JoinState(stT, stF), env)
+    {
+        forall k | k in JoinState(stT, stF)
+            ensures k in env
+            ensures (JoinState(stT, stF)[k] == Zero ==> env[k] == 0)
+            ensures (JoinState(stT, stF)[k] == NonZero ==> env[k] != 0)
+        {
+            assert k in stT && k in stF;
+            assert k in env; // from Consistent(stF, env)
+
+            if JoinState(stT, stF)[k] == Zero {
+            assert stF[k] == Zero;
+            assert env[k] == 0;
+            }
+            if JoinState(stT, stF)[k] == NonZero {
+            assert stF[k] == NonZero;
+            assert env[k] != 0;
+            }
         }
     }
     
-    // key lemma: if AnalyzeStmt returns true (meaning statement is safe), then ExecStmt will not result in an error.
-    lemma AnalyzeTrueExecValid(s: Stmt, defs: Defs, env: Env)
-        requires AnalyzeStmt(s, defs).0
-        requires forall v :: v in defs ==> v in env
+    lemma AnalyzeTrueExecValid(s: Stmt, st: AbsState, env: Env)
+        requires AnalyzeStmt(s, st).0
+        requires Consistent(st, env)
         ensures !IsErr(ExecStmt(s, env))
         ensures match ExecStmt(s, env)
-          case Ok(envOut) =>
-            forall v :: v in AnalyzeStmt(s, defs).1 ==> v in envOut
-          case Err(_) => true
+            case Ok(envOut) => Consistent(AnalyzeStmt(s, st).1, envOut)
+            case Err(_) => true
         decreases s
-    {        
+    {
         match s
 
-        case Skip() => {
-            assert ExecStmt(Skip(), env) == Ok(env);
-            assert !IsErr(Ok(env));
-            assert !IsErr(ExecStmt(s, env));
-            assert forall v :: v in AnalyzeStmt(Skip(), defs).1 ==> v in env;
-        }
+        case Skip() => assert ExecStmt(Skip(), env) == Ok(env);
 
-        case Assign(key, value) => {
-            assert CheckExpr(value, defs);
-            CheckTrueEvalValid(value, defs, env);
-            
-            match EvalExpr(value, env)
+        case Assign(x, e) => {
+            assert CheckExpr(e, st);
+            CheckTrueEvalValid(e, st, env);
+
+            match EvalExpr(e, env)
             case Ok(v) => {
-                assert ExecStmt(Assign(key, value), env) == Ok(Update(env, key, v));
-                assert forall x :: x in AnalyzeStmt(Assign(key, value), defs).1 ==> x in Update(env, key, v);
-                assert !IsErr(Ok(Update(env, key, v)));
-                assert !IsErr(ExecStmt(s, env));
+                var update_env := Update(env, x, v);
+                assert ExecStmt(Assign(x, e), env) == Ok(update_env);
+
+                var stOut := AnalyzeStmt(Assign(x, e), st).1;
+
+                assert stOut == st[x := AbsEval(e, st)];
+
+                assert Consistent(stOut, update_env) by 
+                {
+                    forall y | y in stOut
+                        ensures y in update_env
+                        ensures (stOut[y] == Zero ==> update_env[y] == 0)
+                        ensures (stOut[y] == NonZero ==> update_env[y] != 0)
+                    {
+                        if y == x {
+                            assert y in update_env;
+
+                            assert update_env[x] == v;
+
+                            assert stOut[x] == AbsEval(e, st);
+
+                            if stOut[x] == Zero {
+                                assert AbsEval(e, st) == Zero;
+                                AbsZeroOkValueZero(e, st, env, v);
+                                assert update_env[x] == 0;
+                            }
+
+                            if stOut[x] == NonZero {
+                                assert AbsEval(e, st) == NonZero;
+                                AbsNonZeroOkValueNonZero(e, st, env, v);
+                                assert update_env[x] != 0;
+                            }
+                        } else {
+                            assert stOut[y] == st[y];
+                            assert y in st && y in env && y in update_env;
+
+                            assert update_env[y] == env[y];
+
+                            if stOut[y] == Zero {
+                                assert st[y] == Zero;
+                                assert env[y] == 0;
+                                assert update_env[y] == 0;
+                            }
+
+                            if stOut[y] == NonZero {
+                                assert st[y] == NonZero;
+                                assert env[y] != 0;
+                                assert update_env[y] != 0;
+                            }
+                        }
+                    }
+                }
             }
-            case Err(e1) => assert false; // impossible, already know not erroneous
+            case Err(_) => assert false;
         }
 
         case Seq(s1, s2) => {
-            var r1 := AnalyzeStmt(s1, defs);
-            AnalyzeTrueExecValid(s1, defs, env);
-            
-            match ExecStmt(s1, env)
-            case Ok(env1) => assert forall v :: v in r1.1 ==> v in env1;
-            case Err(e1) => assert false;
-            
+            var r1 := AnalyzeStmt(s1, st);
+            AnalyzeTrueExecValid(s1, st, env);
+
             match ExecStmt(s1, env)
             case Ok(env1) => {
+                // From recursive ensures:
+                assert Consistent(r1.1, env1);
+
                 AnalyzeTrueExecValid(s2, r1.1, env1);
+
+                // ExecStmt(Seq) definition:
                 assert !IsErr(ExecStmt(Seq(s1, s2), env));
+                // And output consistency comes from second recursive call
             }
-            case Err(er) => assert false; // Impossible because we already proved s1 doesn't error
+            case Err(_) => assert false; // impossible by recursive soundness
         }
 
-        case If(cond, then_stmt, else_stmt) => {
-            assert CheckExpr(cond, defs) && AnalyzeStmt(then_stmt, defs).0 && AnalyzeStmt(else_stmt, defs).0;
-            CheckTrueEvalValid(cond, defs, env);
+        case If(cond, t, f) => {
+            assert CheckExpr(cond, st);
+            CheckTrueEvalValid(cond, st, env);
 
-            AnalyzeTrueExecValid(then_stmt, defs, env);
-            AnalyzeTrueExecValid(else_stmt, defs, env);
-            
+            var absCond := AbsEval(cond, st);
+
             match EvalExpr(cond, env)
-            case Ok(v) => {
-                if(v == 0){
-                    assert ExecStmt(If(cond, then_stmt, else_stmt), env) == ExecStmt(else_stmt, env);
-                    assert !IsErr(ExecStmt(else_stmt, env));
-                } else{
-                    assert ExecStmt(If(cond, then_stmt, else_stmt), env) == ExecStmt(then_stmt, env);
-                    assert !IsErr(ExecStmt(then_stmt, env));
+            case Ok(vc) => {
+                match absCond
+                case Zero => {
+                    assert AnalyzeStmt(If(cond, t, f), st).1 == AnalyzeStmt(f, st).1;
+
+                    AbsZeroOkValueZero(cond, st, env, vc);
+                    assert vc == 0;
+
+                    assert AnalyzeStmt(f, st).0;
+                    AnalyzeTrueExecValid(f, st, env);
+
+                    assert ExecStmt(If(cond, t, f), env) == ExecStmt(f, env);
+                    assert !IsErr(ExecStmt(f, env));
+
+                    match ExecStmt(f, env)
+                    case Ok(envOut) => {
+                        assert Consistent(AnalyzeStmt(f, st).1, envOut);
+                        assert Consistent(AnalyzeStmt(If(cond, t, f), st).1, envOut);
+                    }
+                    case Err(_) => assert false;
                 }
-                assert !IsErr(ExecStmt(If(cond, then_stmt, else_stmt), env));
+                case NonZero => {
+                    assert AnalyzeStmt(If(cond, t, f), st).1 == AnalyzeStmt(t, st).1;
+
+                    AbsNonZeroOkValueNonZero(cond, st, env, vc);
+                    assert vc != 0;
+
+                    assert AnalyzeStmt(t, st).0;
+                    AnalyzeTrueExecValid(t, st, env);
+
+                    assert ExecStmt(If(cond, t, f), env) == ExecStmt(t, env);
+                    assert !IsErr(ExecStmt(t, env));
+
+                    match ExecStmt(t, env)
+                    case Ok(envOut) => {
+                        assert Consistent(AnalyzeStmt(t, st).1, envOut);
+                        assert Consistent(AnalyzeStmt(If(cond, t, f), st).1, envOut);
+                    }
+                    case Err(_) => assert false;
+                }
+                case Unknown => {
+                    assert AnalyzeStmt(t, st).0;
+                    assert AnalyzeStmt(f, st).0;
+
+                    AnalyzeTrueExecValid(t, st, env);
+                    AnalyzeTrueExecValid(f, st, env);
+
+                    assert AnalyzeStmt(If(cond, t, f), st).1 == JoinState(AnalyzeStmt(t, st).1, AnalyzeStmt(f, st).1);
+
+                    if vc == 0 {
+                        assert ExecStmt(If(cond, t, f), env) == ExecStmt(f, env);
+
+                        match ExecStmt(f, env)
+                        case Ok(envOut) => {
+                            assert Consistent(AnalyzeStmt(f, st).1, envOut);
+                            ConsistentJoinRight(AnalyzeStmt(t, st).1, AnalyzeStmt(f, st).1, envOut);
+                            assert Consistent(AnalyzeStmt(If(cond, t, f), st).1, envOut);
+                        }
+                        case Err(_) => assert false;
+                    } else {
+                        assert ExecStmt(If(cond, t, f), env) == ExecStmt(t, env);
+
+                        match ExecStmt(t, env)
+                        case Ok(envOut) => {
+                            assert Consistent(AnalyzeStmt(t, st).1, envOut);
+                            ConsistentJoinLeft(AnalyzeStmt(t, st).1, AnalyzeStmt(f, st).1, envOut);
+                            assert Consistent(AnalyzeStmt(If(cond, t, f), st).1, envOut);
+                        }
+                        case Err(_) => assert false;
+                    }
+                }
+
+                assert !IsErr(ExecStmt(If(cond,t,f), env));
             }
-            case Err(e1) => assert false; // Impossible because we already asserted no error.
+            case Err(_) => assert false; // cannot happen since CheckTrueEvalValid
         }
     }
 
     lemma AnalyzeProgramSound(p: Stmt, env: Env)
-        requires AnalyzeStmt(p, {}).0
+        requires AnalyzeStmt(p, map[]).0
         ensures !IsErr(ExecStmt(p, env))
     {
-        AnalyzeTrueExecValid(p, {}, env);
+        AnalyzeTrueExecValid(p, map[], env);
     }
 }
