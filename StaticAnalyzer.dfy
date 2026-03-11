@@ -5,6 +5,7 @@ module StaticAnalyzer {
     // AST Syntax Definition
 
     // abstract state of variables, not like the dynamically updated map of variables but is able to track certain aspects of the variables
+    // datatype AbsVal = Zero | NonZero | Unknown
     datatype AbsVal = Zero | NonZero | Unknown
     type AbsState = map<string, AbsVal>
     
@@ -16,7 +17,7 @@ module StaticAnalyzer {
         | Sub(e1: Expr, e2: Expr)
         | Mul(e1: Expr, e2: Expr)
         | Div(e1: Expr, e2: Expr)
-        | Mod(e1: Expr, e2: Expr) // Potentially add this
+        | Mod(e1: Expr, e2: Expr) 
 
     // Statement datatype
     datatype Stmt =
@@ -44,8 +45,6 @@ module StaticAnalyzer {
 
     // Set/Update a variable
     function Update(env: Env, x: string, v: int): Env
-        // Cool note about this, since a new map is made every time an entry is added,
-        // You can't just have a postcondition like 'ensures x in env'
         ensures x in Update(env, x, v)
         ensures Update(env, x, v)[x] == v
     {
@@ -56,7 +55,6 @@ module StaticAnalyzer {
     // 3) Expression evaluation (runtime)
     // -----------------------------
     function EvalExpr(e: Expr, env: Env): Result<int>
-        //requires CheckExpr(e, env.Keys)
         decreases e
     {
         match e
@@ -94,7 +92,7 @@ module StaticAnalyzer {
                 }
             }
 
-        // If e is a multiplication between two expressions, evaluate the expressions and add them addition, checking for errors.
+        // If e is a multiplication between two expressions, evaluate the expressions, checking for errors.
         case Mul(a,b) =>
             match EvalExpr(a, env) {
             case Err(er) => Err(er)
@@ -105,7 +103,7 @@ module StaticAnalyzer {
                 }
             }
 
-        // If e is a division between two expressions, evaluate the addition, checking for errors.
+        // If e is a division between two expressions, evaluate the expressions, checking for errors.
         case Div(a,b) =>
             match EvalExpr(a, env) {
             case Err(er) => Err(er)
@@ -223,10 +221,6 @@ module StaticAnalyzer {
         case Div(a,b) => CheckExpr(a, state) && CheckExpr(b, state) && AbsEval(b, state) == NonZero
 
         case Mod(a,b) => CheckExpr(a, state) && CheckExpr(b, state) && AbsEval(b, state) == NonZero
-        // to be clear this is sound but not complete.
-        // it's possible for there to be a valid example where we have a
-        // variable or a subexpression which evaluates to 0, but for the 
-        // sake of simplicity early on this will only allow validity if denom is a non-zero constant.
     }
 
     function JoinVal(a: AbsVal, b: AbsVal): AbsVal
@@ -250,6 +244,7 @@ module StaticAnalyzer {
             if CheckExpr(e, state)
             then (true, state[x := AbsEval(e, state)])
             else (false, state)
+        
         case Seq(s1, s2) =>
             match AnalyzeStmt(s1, state){
                 case (false, state_f_s1) => (false, state_f_s1)
@@ -282,7 +277,7 @@ module StaticAnalyzer {
     predicate Consistent(st: AbsState, env: Env){
         forall x :: x in st ==>
             x in env &&
-            (st[x] == Zero ==>  env[x] == 0) &&
+            (st[x] == Zero ==> env[x] == 0) &&
             (st[x] == NonZero ==> env[x] != 0)
     }
 
@@ -853,10 +848,28 @@ module StaticAnalyzer {
         }
     }
 
-    lemma AnalyzeProgramSound(p: Stmt, env: Env)
-        requires AnalyzeStmt(p, map[]).0
+    function AbsInit(env: Env): AbsState
+    {
+        map x | x in env ::
+            if env[x] == 0 then Zero else NonZero
+    }
+
+    lemma AnalyzeProgramInput(p: Stmt, env: Env)
+        requires AnalyzeStmt(p, AbsInit(env)).0
         ensures !IsErr(ExecStmt(p, env))
     {
-        AnalyzeTrueExecValid(p, map[], env);
+        AnalyzeTrueExecValid(p, AbsInit(env), env);
+    }
+
+    lemma AnalyzeProgramSound(p: Stmt)
+        requires AnalyzeProg(p)
+        ensures !IsErr(ExecStmt(p, map[]))
+    {
+        AnalyzeTrueExecValid(p, map[], map[]);
+    }
+
+    function AnalyzeProg(p: Stmt): bool
+    {
+        AnalyzeStmt(p, map[]).0
     }
 }
