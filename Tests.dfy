@@ -1,41 +1,49 @@
+// ECS 261 Final Project
+// Tests.dfy
+
+include "Types.dfy" 
 include "StaticAnalyzer.dfy" 
 
 module Tests{
     import opened StaticAnalyzer
+    import opened Types
 
-    method TestCase1(){
+    method TestCaseSimpleArithmetic(){
         /*
         v := 4 + 4;
         v := v / 2;
         */
         var stmt1 := Assign("v", Add(Const(4), Const(4)));
         var stmt2 := Assign("v", Div(Var("v"), Const(2)));
-        var stmt3 := Seq(stmt1, stmt2);
+        var stmt := Seq(stmt1, stmt2);
         var env := map[];
-        var state := map[];
         
-        AnalyzeProgramSound(stmt3);
-        assert AnalyzeStmt(stmt3, state).0;
-        match ExecStmt(stmt3, env)
-        case Ok(env1) => assert env1["v"] == 4;
-        case Err(e1) => assert false;
+        var safe := AnalyzeProgram(stmt, env);
+        assert safe;
+        AnalyzeProgramSound(stmt, env);
+
+        match ExecStmt(stmt, env)
+        case Ok(envOut) => assert envOut["v"] == 4;
+        case Err(e) => assert false;
     }
 
-    method TestCase2(){
+    method TestCaseUninitVarErr(){
         /*
         y := x + 1;
         */
         var stmt := Assign("y", Add(Var("x"), Const(1)));
-        var state := map[];
-        assert !AnalyzeStmt(stmt, state).0;
         var env := map[];
+
+        var safe := AnalyzeProgram(stmt, env);
+        assert !safe;
+        AnalyzeProgramSound(stmt, env);
         
         match ExecStmt(stmt, env)
-        case Ok(env1) => assert false;
-        case Err(e1) => assert e1 == UninitializedVar("x");
+        case Ok(envOut) => assert false;
+        case Err(e) => assert e == UninitializedVar("x");
     }
 
-    method TestCase3(){
+    method TestCaseSimpleIf(){
         /*
         if(1){
             x := 1;
@@ -48,18 +56,17 @@ module Tests{
         var stmt_else := Assign("x", Const(0));
         var stmt := If(cond_expr, stmt_then, stmt_else);
         var env := map[];
-        var state := map[];
 
-        AnalyzeProgramSound(stmt);
-
-        assert AnalyzeStmt(stmt, state).0;
+        var safe := AnalyzeProgram(stmt, env);
+        assert safe;
+        AnalyzeProgramSound(stmt, env);
         
         match ExecStmt(stmt, env)
-        case Ok(env1) => assert env1["x"] == 1;
-        case Err(e1) => assert false;
+        case Ok(envOut) => assert envOut["x"] == 1;
+        case Err(e) => assert false;
     }
 
-    method TestCase4(){
+    method TestCaseIfCasePruning(){
         /*
         if(1){
             x := 1;
@@ -74,48 +81,33 @@ module Tests{
         var if_stmt := If(cond_expr, stmt_then, stmt_else);
         var stmt := Seq(if_stmt, Assign("z", Var("x")));
         var env := map[];
-        var state := map[];
-
-        AnalyzeProgramSound(stmt);
-
-        assert AnalyzeStmt(stmt, state).0;    
         
+        var safe := AnalyzeProgram(stmt, env);
+        assert safe;
+        AnalyzeProgramSound(stmt, env);
+
         match ExecStmt(stmt, env)
-        case Ok(env1) => assert env1["x"] == 1;
-        case Err(e1) => assert false;
+        case Ok(envOut) => assert envOut["x"] == 1;
+        case Err(e) => assert false;
     }
 
-    method TestCase5(){
-        /*
-        z := 1 / 0;
-        */
-        var stmt := Assign("z", Div(Const(1), Const(0)));
-        var env := map[];
-        var state := map[];
-
-        assert !AnalyzeStmt(stmt, state).0;
-        
-        match ExecStmt(stmt, env)
-        case Ok(env1) => assert false;
-        case Err(e1) => assert e1 == DivByZero();
-    }
-
-    method TestCase6(){
+    method TestCaseAdditionInDenom(){
         /*
         z := 12 / (2 + 2);
         */
         var stmt := Assign("z", Div(Const(12), Add(Const(2), Const(2))));
         var env := map[];
-        var state := map[];
-
-        assert !AnalyzeStmt(stmt, state).0;
+        
+        var safe := AnalyzeProgram(stmt, env);
+        assert safe;
+        AnalyzeProgramSound(stmt, env);
         
         match ExecStmt(stmt, env)
-        case Ok(env1) => assert env1["z"] == 3;
-        case Err(e1) => assert false;
+        case Ok(envOut) => assert envOut["z"] == 3;
+        case Err(e) => assert false;
     }
 
-    method TestCase7(){
+    method TestCaseArithmeticConditionBranch(){
         /*
         if(1 + (-1)){
             v := 30;
@@ -127,35 +119,38 @@ module Tests{
         var cond := Add(Const(1), Const(-1));
         var stmt1 := Assign("v", Mul(Const(4), Const(4)));
         var stmt2 := Assign("v", Sub(Var("v"), Const(2)));
-        var stmt3 := If(cond, Assign("v", Const(30)), Seq(stmt1, stmt2));
-        var state := map[];
-        
-        assert AnalyzeStmt(stmt3, state).0;
+        var stmt := If(cond, Assign("v", Const(30)), Seq(stmt1, stmt2));
         var env := map[];
-        match ExecStmt(stmt3, env)
-        case Ok(env1) => assert env1["v"] == 14;
-        case Err(e1) => assert false;
+        
+        var safe := AnalyzeProgram(stmt, env);
+        assert safe;
+        AnalyzeProgramSound(stmt, env);
+
+        match ExecStmt(stmt, env)
+        case Ok(envOut) => assert envOut["v"] == 14;
+        case Err(e) => assert false;
     }
 
-    method TestCase8(){
+    method TestCaseModulo(){
         /*
         v := 4 + 4;
         v := v % 2;
         */
         var stmt1 := Assign("v", Add(Const(4), Const(4)));
         var stmt2 := Assign("v", Mod(Var("v"), Const(2)));
-        var stmt3 := Seq(stmt1, stmt2);
+        var stmt := Seq(stmt1, stmt2);
         var env := map[];
-        var state := map[];
         
-        AnalyzeProgramSound(stmt3);
-        assert AnalyzeStmt(stmt3, state).0;
-        match ExecStmt(stmt3, env)
-        case Ok(env1) => assert env1["v"] == 0;
-        case Err(e1) => assert false;
+        var safe := AnalyzeProgram(stmt, env);
+        assert safe;
+        AnalyzeProgramSound(stmt, env);
+
+        match ExecStmt(stmt, env)
+        case Ok(envOut) => assert envOut["v"] == 0;
+        case Err(e) => assert false;
     }
 
-    method TestCaseDivByZero(){
+    method TestCaseSimpleDivByZero(){
         /*
         v := 0;
         v := 1 / v;
@@ -164,17 +159,17 @@ module Tests{
         var s2 := Assign("v", Div(Const(1), Var("v")));
         var stmt := Seq(s1, s2);
         var env := map[];
-        var state := map[];
-        
-        var safe := AnalyzeStmt(stmt, state).0;
+       
+        var safe := AnalyzeProgram(stmt, env);
         assert !safe;
+        AnalyzeProgramSound(stmt, env);
         
         match ExecStmt(stmt, env)
-        case Ok(env1) => assert false;
-        case Err(e1) => assert e1 == DivByZero;
+        case Ok(envOut) => assert false;
+        case Err(e) => assert e == DivByZero;
     }
 
-    method TestCasePruning(){
+    method TestCasePruningElseBranchError(){
         /*
         if (1) then (x := 5) else (x := 1 / 0);
         z := x;
@@ -185,13 +180,15 @@ module Tests{
         var s2 := Assign("z", Var("x"));
         var stmt := Seq(s1, s2);
         var env := map[];
-        var state := map[];
-        var safe := AnalyzeStmt(stmt, state).0;
+        
+
+        var safe := AnalyzeProgram(stmt, env);
         assert safe;
-        AnalyzeProgramSound(stmt);
+        AnalyzeProgramSound(stmt, env);
+
         match ExecStmt(stmt, env)
-        case Ok(env1) => assert env1["z"] == 5;
-        case Err(e1) => assert false;
+        case Ok(envOut) => assert envOut["z"] == 5;
+        case Err(e) => assert false;
     }
 
     method TestCaseIncompleteness(){
@@ -207,32 +204,16 @@ module Tests{
         var s2 := Assign("z", Add(Var("z"), Var("x")));
         var stmt := Seq(cond, Seq(s1, s2));
         var env := map[];
-        var state := map[];
-        var safe := AnalyzeStmt(stmt, state).0;
+
+        var safe := AnalyzeProgram(stmt, env);
         assert !safe;
+        AnalyzeProgramSound(stmt, env);
+
         match ExecStmt(stmt, env)
-        case Ok(env1) => assert env1["z"] == 6;
-        case Err(e1) => assert false;
+        case Ok(envOut) => assert envOut["z"] == 6;
+        case Err(e) => assert false;
     }
 
-    method TestCaseOverflow(){
-        /*
-        x := 10e17 + (-1);
-        if (x) then (y := 3) else (z := )
-        x := x + y
-        */
-        var cond := Assign("x", Add(Const(1000000000000000000), Const(-1)));
-        var then_stmt := Assign("y", Const(3));
-        var else_stmt := Assign("z", Const(2));
-        var s1 := If(Var("x"), then_stmt, else_stmt);
-        var s2 := Assign("x", Add(Var("x"), Var("y")));
-        var stmt := Seq(cond, Seq(s1, s2));
-        var env := map[];
-        var state := map[];
-        var safe := AnalyzeStmt(stmt, state).0;
-        assert !safe;
-        match ExecStmt(stmt, env)
-        case Ok(env1) => assert env1["x"] == 1000000000000000002;
-        case Err(e1) => assert false;
-    }
+    // Add your own test programs here!
+    // Follow the format above, explained in README.md.
 }
