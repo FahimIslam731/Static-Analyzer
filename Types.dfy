@@ -24,6 +24,7 @@ module Types{
         | Assign(x: string, e: Expr)
         | Seq(s1: Stmt, s2: Stmt)
         | If(cond: Expr, t: Stmt, f: Stmt)
+        | Loop(runtimes: Expr, s: Stmt)
 
     // Runtime model
     
@@ -35,7 +36,7 @@ module Types{
     datatype RuntimeError =
         | DivByZero
         | UninitializedVar(x: string)
-        // out of bounds
+        
 
     // Result can either be Ok, or a runtime error.
     datatype Result<T> =
@@ -43,9 +44,9 @@ module Types{
         | Err(e: RuntimeError)
 
     // Set/Update a variable
-    function Update(env: Env, x: string, v: int): Env
-        ensures x in Update(env, x, v)
-        ensures Update(env, x, v)[x] == v
+    function update(env: Env, x: string, v: int): Env
+        ensures x in update(env, x, v)
+        ensures update(env, x, v)[x] == v
     {
         env[x := v]
     }

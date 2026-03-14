@@ -18,11 +18,11 @@ module Tests{
         var stmt := Seq(stmt1, stmt2);
         var env := map[];
         
-        var safe := AnalyzeProgram(stmt, env);
+        var safe := analyze_program(stmt, env);
         assert safe;
         AnalyzeProgramSound(stmt, env);
 
-        match ExecStmt(stmt, env)
+        match exec_stmt(stmt, env)
         case Ok(envOut) => assert envOut["v"] == 4;
         case Err(e) => assert false;
     }
@@ -34,11 +34,11 @@ module Tests{
         var stmt := Assign("y", Add(Var("x"), Const(1)));
         var env := map[];
 
-        var safe := AnalyzeProgram(stmt, env);
+        var safe := analyze_program(stmt, env);
         assert !safe;
         AnalyzeProgramSound(stmt, env);
         
-        match ExecStmt(stmt, env)
+        match exec_stmt(stmt, env)
         case Ok(envOut) => assert false;
         case Err(e) => assert e == UninitializedVar("x");
     }
@@ -57,11 +57,11 @@ module Tests{
         var stmt := If(cond_expr, stmt_then, stmt_else);
         var env := map[];
 
-        var safe := AnalyzeProgram(stmt, env);
+        var safe := analyze_program(stmt, env);
         assert safe;
         AnalyzeProgramSound(stmt, env);
         
-        match ExecStmt(stmt, env)
+        match exec_stmt(stmt, env)
         case Ok(envOut) => assert envOut["x"] == 1;
         case Err(e) => assert false;
     }
@@ -82,11 +82,11 @@ module Tests{
         var stmt := Seq(if_stmt, Assign("z", Var("x")));
         var env := map[];
         
-        var safe := AnalyzeProgram(stmt, env);
+        var safe := analyze_program(stmt, env);
         assert safe;
         AnalyzeProgramSound(stmt, env);
 
-        match ExecStmt(stmt, env)
+        match exec_stmt(stmt, env)
         case Ok(envOut) => assert envOut["x"] == 1;
         case Err(e) => assert false;
     }
@@ -98,11 +98,11 @@ module Tests{
         var stmt := Assign("z", Div(Const(12), Add(Const(2), Const(2))));
         var env := map[];
         
-        var safe := AnalyzeProgram(stmt, env);
+        var safe := analyze_program(stmt, env);
         assert safe;
         AnalyzeProgramSound(stmt, env);
         
-        match ExecStmt(stmt, env)
+        match exec_stmt(stmt, env)
         case Ok(envOut) => assert envOut["z"] == 3;
         case Err(e) => assert false;
     }
@@ -122,11 +122,11 @@ module Tests{
         var stmt := If(cond, Assign("v", Const(30)), Seq(stmt1, stmt2));
         var env := map[];
         
-        var safe := AnalyzeProgram(stmt, env);
+        var safe := analyze_program(stmt, env);
         assert safe;
         AnalyzeProgramSound(stmt, env);
 
-        match ExecStmt(stmt, env)
+        match exec_stmt(stmt, env)
         case Ok(envOut) => assert envOut["v"] == 14;
         case Err(e) => assert false;
     }
@@ -141,11 +141,11 @@ module Tests{
         var stmt := Seq(stmt1, stmt2);
         var env := map[];
         
-        var safe := AnalyzeProgram(stmt, env);
+        var safe := analyze_program(stmt, env);
         assert safe;
         AnalyzeProgramSound(stmt, env);
 
-        match ExecStmt(stmt, env)
+        match exec_stmt(stmt, env)
         case Ok(envOut) => assert envOut["v"] == 0;
         case Err(e) => assert false;
     }
@@ -160,11 +160,11 @@ module Tests{
         var stmt := Seq(s1, s2);
         var env := map[];
        
-        var safe := AnalyzeProgram(stmt, env);
+        var safe := analyze_program(stmt, env);
         assert !safe;
         AnalyzeProgramSound(stmt, env);
         
-        match ExecStmt(stmt, env)
+        match exec_stmt(stmt, env)
         case Ok(envOut) => assert false;
         case Err(e) => assert e == DivByZero;
     }
@@ -182,11 +182,11 @@ module Tests{
         var env := map[];
         
 
-        var safe := AnalyzeProgram(stmt, env);
+        var safe := analyze_program(stmt, env);
         assert safe;
         AnalyzeProgramSound(stmt, env);
 
-        match ExecStmt(stmt, env)
+        match exec_stmt(stmt, env)
         case Ok(envOut) => assert envOut["z"] == 5;
         case Err(e) => assert false;
     }
@@ -205,12 +205,56 @@ module Tests{
         var stmt := Seq(cond, Seq(s1, s2));
         var env := map[];
 
-        var safe := AnalyzeProgram(stmt, env);
+        var safe := analyze_program(stmt, env);
         assert !safe;
         AnalyzeProgramSound(stmt, env);
 
-        match ExecStmt(stmt, env)
+        match exec_stmt(stmt, env)
         case Ok(envOut) => assert envOut["z"] == 6;
+        case Err(e) => assert false;
+    }
+
+    method TestCaseLoop(){
+        /*
+        z := 4;
+        loop(z){
+            z := z + 1;
+        }
+        */
+        var stmt1 := Assign("z", Const(4));
+        var stmt2 := Loop(Var("z"), Assign("z", Add(Var("z"), Const(1))));
+        var stmt := Seq(stmt1, stmt2);
+        var env := map[];
+        
+        var safe := analyze_program(stmt, env);
+        assert safe;
+        AnalyzeProgramSound(stmt, env);
+        
+        match exec_stmt(stmt, env)
+        case Ok(envOut) => assert envOut["z"] == 8;
+        case Err(e) => assert false;
+    }
+
+    method TestCaseLoopIncomplete(){
+        /*
+        z := 4;
+        x := 0;
+        loop(z){
+            x := x + 1;
+        }
+        */
+        var stmt1 := Assign("z", Const(4));
+        var stmt2 := Assign("x", Const(0));
+        var stmt3 := Loop(Var("z"), Assign("x", Add(Var("x"), Const(1))));
+        var stmt := Seq(stmt1, Seq(stmt2, stmt3));
+        var env := map[];
+        
+        var safe := analyze_program(stmt, env);
+        assert !safe;
+        AnalyzeProgramSound(stmt, env);
+        
+        match exec_stmt(stmt, env)
+        case Ok(envOut) => assert envOut["x"] == 4;
         case Err(e) => assert false;
     }
 
